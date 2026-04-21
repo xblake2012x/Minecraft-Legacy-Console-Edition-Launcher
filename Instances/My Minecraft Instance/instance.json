@@ -1,7 +1,0 @@
-{
-    "Name": "My Minecraft Instance",
-    "Path": "Instances/My Minecraft Instance/minecraft/Minecraft.Client.exe",
-    "Icon": "Instances/My Minecraft Instance/icon.png",
-    "Args": "",
-    "WinePrefix": ""
-}
