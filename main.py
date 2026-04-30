@@ -1,5 +1,6 @@
+from logging import exception
 from PySide6.QtWidgets import QApplication, QWidget, QVBoxLayout, QHBoxLayout, QComboBox, QCheckBox
-from PySide6.QtWidgets import QLabel, QPushButton, QProgressBar, QLineEdit, QGridLayout, QScrollArea, QTextEdit, QListWidget, QStackedWidget
+from PySide6.QtWidgets import QLabel, QPushButton, QProgressBar, QLineEdit, QGridLayout, QScrollArea, QTextEdit, QListWidget, QStackedWidget, QMessageBox
 from PySide6.QtGui import QPixmap, Qt
 from PySide6.QtCore import Signal, QObject
 import subprocess
@@ -12,6 +13,7 @@ import sys
 import shutil
 from PySide6.QtGui import QFontMetrics
 import threading
+import time
 
 settings = {}
 with open("Launcher_Settings.json") as f:
@@ -63,6 +65,22 @@ def check_for_launcher_updates(window):
         status_label.setText("Launcher_Data.json states version higher than github version")
     elif status == "Invalid Meta Data":
         status_label.setText("Launcher_Data.json or github version meta data was invalid")
+
+def apply_sort_logic(mode, instances):
+    if mode == "A–Z":
+        instances.sort(key=lambda x: x.get("Name", "No Name").lower())
+    elif mode == "Z–A":
+        instances.sort(key=lambda x: x.get("Name", "No Name").lower(), reverse=True)
+    elif mode == "Newest":
+        instances.sort(key=lambda x: float(x.get("Created", 0)), reverse=True)
+    elif mode == "Oldest":
+        instances.sort(key=lambda x: float(x.get("Created", 0)))
+
+def apply_sort(sort_box, instances):
+    mode = sort_box.currentText()
+    apply_sort_logic(mode, instances)
+    refresh_instance_buttons(instances)
+
 
 def save_settings(window,json_file):
     global settings
@@ -436,19 +454,40 @@ def create_instance_tile(inst):
     layout.addWidget(inner, alignment=Qt.AlignHCenter)
 
     # click handler
+    w.instance_name = inst["Name"]
     w.mousePressEvent = lambda _, i=inst: select_instance(i)
 
     return w
 
+def filter_instances(self, content_layout, text):
+    text = text.lower()
 
-def refresh_instance_buttons():
+    for i in range(content_layout.count()):
+        item = content_layout.itemAt(i)
+        widget = item.widget()
+
+        if widget is None:
+            continue
+
+        # Assuming each instance widget has a .instance_name attribute
+        name = getattr(widget, "instance_name", "").lower()
+
+        widget.setVisible(text in name)
+
+
+def refresh_instance_buttons(instances=None):
     # Clear old widgets
     for i in reversed(range(content_layout.count())):
         item = content_layout.itemAt(i)
         if item and item.widget():
             item.widget().deleteLater()
 
-    instances = load_instances()
+    if instances is None:
+        instances = load_instances()
+        try:
+            apply_sort_logic(sort_box.currentText(), instances)
+        except NameError:
+            pass
 
     cols = max(1, content.width() // 140)
     row = 0
@@ -523,7 +562,8 @@ def download_and_extract_repo(url, extract_to, instance_name, progress_bar, stat
             "Path": os.path.join(minecraft_path, "Minecraft.Client.exe"),
             "Icon": icon_dest,
             "Args": "",
-            "WinePrefix": ""
+            "WinePrefix": "",
+            "Created": time.time()
         }
 
         with open(json_path, "w") as f:
@@ -578,13 +618,41 @@ def download_with_progress(url, zip_path, progress_bar):
 
 open_windows = []
 
+def check_game(instance_json,start_logs):
+    if instance_json["Path"] is not None:
+        return False
+    else:
+        root_dir = os.path.dirname("~/hi")
+        missing_files = []
+        required_files = ["Minecraft.Client.exe", "Minecraft.Client.exp", "Minecraft.Client.lib", "iggy_w64.dll", "Common","music",'Windows64','Windows64Media']
+        for file in required_files:
+            if not os.path.exists(os.path.join(root_dir, file)):
+                missing_files.append(file)
+        if missing_files:
+            for file in missing_files:
+                start_logs.append(f"Missing file: {file}")
+            return False
+
+        return True
+
+def show_crash_popup(exit_code):
+    msg = QMessageBox()
+    msg.setWindowTitle("Game Crashed")
+    msg.setText(f"Minecraft exited with code {exit_code}")
+    msg.setIcon(QMessageBox.Critical)
+    msg.exec()
+
+
 # Button Functions
 def launch_game(instance_json):
-    print("Launching Minecraft...")
+    start_logs = []
+    check_game(instance_json,start_logs)
+    start_logs.append("Launching Minecraft...")
     command = []
+    start_game = True
     if not settings.get("Close Launcher Startup",False) or settings.get("Open Logs Startup",True):
         log_win, log_box, emitter = open_logs_window(instance_json.get("Name","Unknown"))
-    print(f"Detected platform:{sys.platform}")
+    start_logs.append(f"Detected platform: {sys.platform}")
     if not instance_json["Path"] is None:
         exe_path = instance_json["Path"]
         try:
@@ -592,49 +660,73 @@ def launch_game(instance_json):
         except:
             pass
         if sys.platform.startswith("linux"):
-            print("Setting up Linux command")
+            start_logs.append("Setting up Linux command")
             wine = selected_instance.get("WinePrefix", "")
             if wine_available() or not wine == "":
                 args = selected_instance.get("Args", "").split()
                 command += [wine if wine != "" else "wine", exe_path] + args
             else:
-                print("Wine is not installed!")
-                return
+                start_logs.append("Wine is not installed!")
+                start_game = False
 
         elif sys.platform.startswith("win"):
-            print("Setting up Windows command")
+            start_logs.append("Setting up Windows command")
             args = selected_instance.get("Args", "").split()
             command += [exe_path] + args
 
         elif sys.platform.startswith("darwin"):
-            print("Setting up MacOS command")
+            start_logs.append("Setting up MacOS command")
             args = selected_instance.get("Args", "").split()
             wine = selected_instance.get("WinePrefix", "")
             command += [wine if wine != "" else "wine", exe_path] + args
 
         else:
-            print("Unsupported OS")
-            return
+            start_logs.append("Unsupported OS")
+            start_game = False
     else:
         print("No Path")
-        return
+        start_logs.append("No Path")
+        start_game = False
 
-    proc = subprocess.Popen(command,
-    stdout=subprocess.PIPE,
-    stderr=subprocess.STDOUT,
-    text=True)
+    proc = None
+    try:
+        proc = subprocess.Popen(command if start_game else instance_json["Path"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True)
+
+    except Exception as E:
+        start_logs.append(f"Error: {E}")
 
     if not settings.get("Close Launcher Startup",False) or settings.get("Open Logs Startup",True):
-        def read_output():
-            for line in proc.stdout:
-                if log_win.closed:
-                    break
-                emitter.new_line.emit(line.rstrip())
+        for line in start_logs:
+            if log_win.closed:
+                break
+            emitter.new_line.emit(line.rstrip())
+        if proc:
+            def read_output():
+                for line in proc.stdout:
+                    if log_win.closed:
+                        break
+                    emitter.new_line.emit(line.rstrip())
 
-        threading.Thread(target=read_output, daemon=True).start()
+            threading.Thread(target=read_output, daemon=True).start()
+
+            def watch_process():
+                exit_code = proc.wait()
+                emitter.new_line.emit(f"[Launcher] Game exited with code {exit_code}")
+                if exit_code != 193:
+                    show_crash_popup(exit_code)
+
+            threading.Thread(target=watch_process, daemon=True).start()
+
+        else:
+            pass
 
     if settings.get("Close Launcher Startup",False):
         window.close()
+        return
+
 
 def open_add_instance_window():
     print('making window')
@@ -847,22 +939,36 @@ top_bar_layout.addStretch()
 
 root.addWidget(top_bar)
 
+search_bar = QLineEdit()
+search_bar.setPlaceholderText("Search instances...")
+search_bar.textChanged.connect(lambda: filter_instances(search_bar,content_layout,search_bar.text()))
+
 # Main Area
 middle = QHBoxLayout()
 middle.setContentsMargins(0, 0, 0, 0)
 middle.setSpacing(0)
 root.addLayout(middle)
+left_side = QVBoxLayout()
+middle.addLayout(left_side)
+left_side.addWidget(search_bar)
+
+sort_box = QComboBox()
+sort_box.addItems(["A–Z", "Z–A", "Newest", "Oldest"])
+sort_box.currentIndexChanged.connect(lambda: apply_sort(sort_box, load_instances()))
+left_side.addWidget(sort_box)
+
 
 content = QWidget()
 content.setStyleSheet("background-color: rgb(32, 35, 38);")
 scroll = QScrollArea()
 scroll.setWidgetResizable(True)
 
+
 content = QWidget()
 content_layout = QGridLayout(content)
 
 scroll.setWidget(content)
-middle.addWidget(scroll)
+left_side.addWidget(scroll)
 
 content_layout.setAlignment(Qt.AlignTop | Qt.AlignLeft)
 content_layout.setContentsMargins(10, 10, 10, 10)
