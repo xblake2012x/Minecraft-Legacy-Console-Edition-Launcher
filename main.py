@@ -1,5 +1,6 @@
+from logging import exception
 from PySide6.QtWidgets import QApplication, QWidget, QVBoxLayout, QHBoxLayout, QComboBox, QCheckBox
-from PySide6.QtWidgets import QLabel, QPushButton, QProgressBar, QLineEdit, QGridLayout, QScrollArea, QTextEdit, QListWidget, QStackedWidget
+from PySide6.QtWidgets import QLabel, QPushButton, QProgressBar, QLineEdit, QGridLayout, QScrollArea, QTextEdit, QListWidget, QStackedWidget, QMessageBox, QMenu
 from PySide6.QtGui import QPixmap, Qt
 from PySide6.QtCore import Signal, QObject
 import subprocess
@@ -12,6 +13,11 @@ import sys
 import shutil
 from PySide6.QtGui import QFontMetrics
 import threading
+import time
+
+settings = {}
+with open("Launcher_Settings.json") as f:
+    settings = json.load(f)
 
 class LogEmitter(QObject):
     new_line = Signal(str)
@@ -60,7 +66,40 @@ def check_for_launcher_updates(window):
     elif status == "Invalid Meta Data":
         status_label.setText("Launcher_Data.json or github version meta data was invalid")
 
+def apply_sort_logic(mode, instances):
+    if mode == "A–Z":
+        instances.sort(key=lambda x: x.get("Name", "No Name").lower())
+    elif mode == "Z–A":
+        instances.sort(key=lambda x: x.get("Name", "No Name").lower(), reverse=True)
+    elif mode == "Newest":
+        instances.sort(key=lambda x: float(x.get("Created", 0)), reverse=True)
+    elif mode == "Oldest":
+        instances.sort(key=lambda x: float(x.get("Created", 0)))
+
+def apply_sort(sort_box, instances):
+    mode = sort_box.currentText()
+    apply_sort_logic(mode, instances)
+    refresh_instance_buttons(instances)
+
+
+def save_settings(window,json_file):
+    global settings
+
+    settings["Theme"] = window.findChild(QComboBox, "Theme").currentText()
+    settings["Close Launcher Startup"] = window.findChild(QCheckBox, "Close Launcher Startup").isChecked()
+    settings["Instance Path"] = window.findChild(QLineEdit, "Instance Path").text()
+
+    with open(json_file, "w") as f:
+        json.dump(settings,f,indent=4)
+
+    load_instances()
+
 def open_settings_window():
+    settings_file = "Launcher_Settings.json"
+    settings = {}
+    with open(settings_file) as f:
+        settings = json.load(f)
+
     win = QWidget()
     win.setWindowTitle("Settings")
     win.resize(800, 500)
@@ -71,12 +110,33 @@ def open_settings_window():
     layout.setSpacing(0)
 
     # LEFT: Category list
+    Left_List = QVBoxLayout()
     category_list = QListWidget()
     category_list.addItems(["Launcher", "Minecraft", "Updates"])
     category_list.setFixedWidth(150)
     category_list.setStyleSheet("color: white; background-color: rgb(24, 26, 27);")
-    layout.addWidget(category_list)
+    save_btn = QPushButton("Save Settings")
+    save_btn.setFixedHeight(40)
+    save_btn.setStyleSheet("""
+            QPushButton {
+                background-color: rgb(45, 48, 50);
+                color: white;
+                border: 1px solid rgb(60, 63, 65);
+                border-radius: 6px;
+                font-size: 14px;
+            }
+            QPushButton:hover {
+                background-color: rgb(55, 58, 60);
+            }
+            QPushButton:pressed {
+                background-color: rgb(35, 38, 40);
+            }
+        """)
+    save_btn.clicked.connect(lambda: save_settings(win,settings_file))
 
+    Left_List.addWidget(category_list)
+    Left_List.addWidget(save_btn)
+    layout.addLayout(Left_List)
     # MIDDLE: Sub-tabs
     subtab_list = QListWidget()
     subtab_list.setFixedWidth(150)
@@ -87,14 +147,15 @@ def open_settings_window():
     settings_stack = QStackedWidget()
     layout.addWidget(settings_stack)
 
-    error_page = QWidget()
-    settings_stack.addWidget(error_page)
-    pages = ["launcher_graphics","minecraft_general","minecraft_paths","updates_launcher"]
+    pages = ["launcher_graphics","minecraft_general","minecraft_paths","updates_launcher","error_page"]
     setting_pages = {}
     for page in pages:
         setting_pages[page] = QWidget()
     for page in setting_pages.values():
         settings_stack.addWidget(page)
+    error_page = QVBoxLayout(setting_pages["error_page"])
+    error_label = QLabel("Error, this sub-category do not have a page, update your launcher if possible")
+    error_page.addWidget(error_label)
 
     # Launcher Graphics Sub Category
     graphics_layout = QVBoxLayout(setting_pages["launcher_graphics"])
@@ -106,8 +167,10 @@ def open_settings_window():
     graphics_layout.addWidget(theme_label)
 
     theme_dropdown = QComboBox()
+    theme_dropdown.setObjectName("Theme")
     theme_dropdown.addItems(["Dark", "Light"])
     theme_dropdown.setStyleSheet("color: white; background-color: rgb(45,48,50);")
+    theme_dropdown.setCurrentText(settings.get("Theme","Dark"))
     graphics_layout.addWidget(theme_dropdown)
     graphics_layout.addStretch()
 
@@ -116,8 +179,9 @@ def open_settings_window():
     minecraft_general_layout.setContentsMargins(20, 20, 20, 20)
     minecraft_general_layout.setSpacing(15)
 
-    bootup_label = QCheckBox("Maximise on bootup")
-    bootup_label.setChecked(True)
+    bootup_label = QCheckBox("Close Launcher when the game starts")
+    bootup_label.setObjectName("Close Launcher Startup")
+    bootup_label.setChecked(settings.get("Close Launcher Startup",False))
     bootup_label.setStyleSheet("color: white; font-size: 14px;")
     minecraft_general_layout.addWidget(bootup_label)
 
@@ -132,9 +196,10 @@ def open_settings_window():
     minecraft_path_layout.addWidget(path_label)
 
     path_input = QLineEdit()
+    path_input.setObjectName("Instance Path")
     path_input.setPlaceholderText("Enter path...")
     path_input.setStyleSheet("color: white; background-color: rgb(45,48,50);")
-    path_input.setText("Instances/")
+    path_input.setText(settings.get("Instance Path","Instances/"))
     minecraft_path_layout.addWidget(path_input)
 
     minecraft_path_layout.addStretch()
@@ -173,6 +238,7 @@ def open_settings_window():
 
     # When category changes, update sub-tabs
     def update_subtabs():
+        save_index = subtab_list.currentRow()
         subtab_list.clear()
         cat = category_list.currentItem().text()
 
@@ -182,6 +248,11 @@ def open_settings_window():
             subtab_list.addItems(["General", "Paths"])
         elif cat == "Updates":
             subtab_list.addItems(["Launcher"])
+
+        if subtab_list.count() - 1 >= save_index and save_index > -1:
+            subtab_list.setCurrentRow(save_index)
+        elif subtab_list.count() > 0:
+            subtab_list.setCurrentRow(0)
 
     category_list.currentRowChanged.connect(update_subtabs)
 
@@ -196,7 +267,7 @@ def open_settings_window():
         if page_id in setting_pages:
             settings_stack.setCurrentWidget(setting_pages[page_id])
         else:
-            settings_stack.setCurrentWidget(error_page)
+            settings_stack.setCurrentWidget(setting_pages["error_page"])
 
     subtab_list.currentRowChanged.connect(update_page)
 
@@ -233,8 +304,6 @@ def open_logs_window(name):
 
     return log_win, log_box, emitter
 
-
-
 def open_instance_folder(inst):
     folder = os.path.dirname(os.path.dirname(inst["Path"]))
 
@@ -254,26 +323,23 @@ def delete_instance(inst):
     text_label.setText("Nothing Selected")
     refresh_instance_buttons()
 
-def enable_rename():
-    if selected_instance["Name"] == "None":
+def enable_rename(inst):
+    if inst["Name"] == "None":
         return
 
-    rename_box.setText(selected_instance["Name"])
+    rename_box.setText(inst["Name"])
     text_label.hide()
     rename_box.show()
     rename_box.setFocus()
 
-
-def finish_rename():
-    global selected_instance
-
-    new_name = rename_box.text().strip()
+def finish_rename(inst, new_name):
+    new_name = new_name.strip()
     if not new_name:
         rename_box.hide()
         text_label.show()
         return
 
-    old_name = selected_instance["Name"]
+    old_name = inst["Name"]
     old_dir = os.path.join("Instances", old_name)
     new_dir = os.path.join("Instances", new_name)
 
@@ -282,13 +348,13 @@ def finish_rename():
         os.rename(old_dir, new_dir)
 
     # update JSON paths
-    selected_instance["Name"] = new_name
-    selected_instance["Icon"] = os.path.join(new_dir, "icon.png")
-    selected_instance["Path"] = os.path.join(new_dir, "minecraft", "Minecraft.Client.exe")
+    inst["Name"] = new_name
+    inst["Icon"] = os.path.join(new_dir, "icon.png")
+    inst["Path"] = os.path.join(new_dir, "minecraft", "Minecraft.Client.exe")
 
     # write updated JSON
     with open(os.path.join(new_dir, "instance.json"), "w") as f:
-        json.dump(selected_instance, f, indent=4)
+        json.dump(inst, f, indent=4)
 
     # update UI
     text_label.setText(new_name)
@@ -323,6 +389,33 @@ def select_instance(inst):
     text_label.setText(inst["Name"])
     pixmap = QPixmap(inst["Icon"])
     img_label.setPixmap(pixmap)
+    refresh_instance_buttons()
+
+def duplicate_instance(inst):
+    old_name = inst["Name"]
+    base = "Instances"
+
+    new_name = old_name + "_Copy"
+    new_dir = os.path.join(base, new_name)
+
+    i = 1
+    while os.path.exists(new_dir):
+        new_name = f"{old_name}_Copy{i}"
+        new_dir = os.path.join(base, new_name)
+        i += 1
+
+    shutil.copytree(os.path.join(base, old_name), new_dir)
+
+    json_path = os.path.join(new_dir, "instance.json")
+    with open(json_path, "r") as f:
+        data = json.load(f)
+
+    data["Name"] = new_name
+    data["Created"] = time.time()
+
+    with open(json_path, "w") as f:
+        json.dump(data, f, indent=4)
+
     refresh_instance_buttons()
 
 
@@ -386,19 +479,81 @@ def create_instance_tile(inst):
     layout.addWidget(inner, alignment=Qt.AlignHCenter)
 
     # click handler
-    w.mousePressEvent = lambda _, i=inst: select_instance(i)
+    def mousePress(event, inst=inst):
+        if event.button() == Qt.RightButton:
+            select_instance(inst)
+            menu = QMenu()
+
+            separators = []
+            title = menu.addSection(inst.get("Name", "Unknown"))
+            rename = menu.addAction("Rename")
+            separators.append(menu.addSeparator())
+            play = menu.addAction("Play")
+            separators.append(menu.addSeparator())
+            edit = menu.addAction("Edit")
+            duplicate = menu.addAction("Duplicate")
+            open_folder = menu.addAction("Open Folder")
+            delete = menu.addAction("Delete")
+
+            action = menu.exec(w.mapToGlobal(event.position().toPoint()))
+
+            if action == play:
+                launch_game(inst)
+
+            elif action == edit:
+                select_instance(inst)
+                open_edit_instance_window()
+
+            elif action == duplicate:
+                duplicate_instance(inst)
+
+            elif action == open_folder:
+                open_instance_folder(inst)
+
+            elif action == delete:
+                delete_instance(inst)
+
+            elif action == rename:
+                enable_rename(inst)
+
+        else:
+            # Left click = select instance
+            select_instance(inst)
+
+    w.mousePressEvent = mousePress
+    w.instance_name = inst["Name"]
 
     return w
 
+def filter_instances(self, content_layout, text):
+    text = text.lower()
 
-def refresh_instance_buttons():
+    for i in range(content_layout.count()):
+        item = content_layout.itemAt(i)
+        widget = item.widget()
+
+        if widget is None:
+            continue
+
+        # Assuming each instance widget has a .instance_name attribute
+        name = getattr(widget, "instance_name", "").lower()
+
+        widget.setVisible(text in name)
+
+
+def refresh_instance_buttons(instances=None):
     # Clear old widgets
     for i in reversed(range(content_layout.count())):
         item = content_layout.itemAt(i)
         if item and item.widget():
             item.widget().deleteLater()
 
-    instances = load_instances()
+    if instances is None:
+        instances = load_instances()
+        try:
+            apply_sort_logic(sort_box.currentText(), instances)
+        except NameError:
+            pass
 
     cols = max(1, content.width() // 140)
     row = 0
@@ -472,8 +627,9 @@ def download_and_extract_repo(url, extract_to, instance_name, progress_bar, stat
             "Name": instance_name,
             "Path": os.path.join(minecraft_path, "Minecraft.Client.exe"),
             "Icon": icon_dest,
-            "Args": [],
-            "WinePrefix": ""
+            "Args": "",
+            "WinePrefix": "",
+            "Created": time.time()
         }
 
         with open(json_path, "w") as f:
@@ -528,12 +684,41 @@ def download_with_progress(url, zip_path, progress_bar):
 
 open_windows = []
 
+def check_game(instance_json,start_logs):
+    if instance_json["Path"] is not None:
+        return False
+    else:
+        root_dir = os.path.dirname("~/hi")
+        missing_files = []
+        required_files = ["Minecraft.Client.exe", "Minecraft.Client.exp", "Minecraft.Client.lib", "iggy_w64.dll", "Common","music",'Windows64','Windows64Media']
+        for file in required_files:
+            if not os.path.exists(os.path.join(root_dir, file)):
+                missing_files.append(file)
+        if missing_files:
+            for file in missing_files:
+                start_logs.append(f"Missing file: {file}")
+            return False
+
+        return True
+
+def show_crash_popup(exit_code):
+    msg = QMessageBox()
+    msg.setWindowTitle("Game Crashed")
+    msg.setText(f"Minecraft exited with code {exit_code}")
+    msg.setIcon(QMessageBox.Critical)
+    msg.exec()
+
+
 # Button Functions
 def launch_game(instance_json):
-    print("Launching Minecraft...")
+    start_logs = []
+    check_game(instance_json,start_logs)
+    start_logs.append("Launching Minecraft...")
     command = []
-    log_win, log_box, emitter = open_logs_window(instance_json.get("Name","Unknown"))
-    print(f"Detected platform:{sys.platform}")
+    start_game = True
+    if not settings.get("Close Launcher Startup",False) or settings.get("Open Logs Startup",True):
+        log_win, log_box, emitter = open_logs_window(instance_json.get("Name","Unknown"))
+    start_logs.append(f"Detected platform: {sys.platform}")
     if not instance_json["Path"] is None:
         exe_path = instance_json["Path"]
         try:
@@ -541,45 +726,73 @@ def launch_game(instance_json):
         except:
             pass
         if sys.platform.startswith("linux"):
-            print("Setting up Linux command")
+            start_logs.append("Setting up Linux command")
             wine = selected_instance.get("WinePrefix", "")
             if wine_available() or not wine == "":
                 args = selected_instance.get("Args", "").split()
                 command += [wine if wine != "" else "wine", exe_path] + args
             else:
-                print("Wine is not installed!")
-                return
+                start_logs.append("Wine is not installed!")
+                start_game = False
 
         elif sys.platform.startswith("win"):
-            print("Setting up Windows command")
+            start_logs.append("Setting up Windows command")
             args = selected_instance.get("Args", "").split()
             command += [exe_path] + args
 
         elif sys.platform.startswith("darwin"):
-            print("Setting up MacOS command")
+            start_logs.append("Setting up MacOS command")
             args = selected_instance.get("Args", "").split()
             wine = selected_instance.get("WinePrefix", "")
             command += [wine if wine != "" else "wine", exe_path] + args
 
         else:
-            print("Unsupported OS")
-            return
+            start_logs.append("Unsupported OS")
+            start_game = False
     else:
         print("No Path")
-        return
+        start_logs.append("No Path")
+        start_game = False
 
-    proc = subprocess.Popen(command,
-    stdout=subprocess.PIPE,
-    stderr=subprocess.STDOUT,
-    text=True)
+    proc = None
+    try:
+        proc = subprocess.Popen(command if start_game else instance_json["Path"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True)
 
-    def read_output():
-        for line in proc.stdout:
+    except Exception as E:
+        start_logs.append(f"Error: {E}")
+
+    if not settings.get("Close Launcher Startup",False) or settings.get("Open Logs Startup",True):
+        for line in start_logs:
             if log_win.closed:
                 break
             emitter.new_line.emit(line.rstrip())
+        if proc:
+            def read_output():
+                for line in proc.stdout:
+                    if log_win.closed:
+                        break
+                    emitter.new_line.emit(line.rstrip())
 
-    threading.Thread(target=read_output, daemon=True).start()
+            threading.Thread(target=read_output, daemon=True).start()
+
+            def watch_process():
+                exit_code = proc.wait()
+                emitter.new_line.emit(f"[Launcher] Game exited with code {exit_code}")
+                if exit_code != 193:
+                    show_crash_popup(exit_code)
+
+            threading.Thread(target=watch_process, daemon=True).start()
+
+        else:
+            pass
+
+    if settings.get("Close Launcher Startup",False):
+        window.close()
+        return
+
 
 def open_add_instance_window():
     print('making window')
@@ -630,7 +843,7 @@ def open_add_instance_window():
         }
     """)
     add_button.clicked.connect(
-        lambda: download_and_extract_repo(url, f"Instances/", name_input.text(), progress, status)
+        lambda: download_and_extract_repo(url, settings.get("Instance Path","Instances/"), name_input.text(), progress, status)
     )
 
     # Status Text
@@ -792,22 +1005,36 @@ top_bar_layout.addStretch()
 
 root.addWidget(top_bar)
 
+search_bar = QLineEdit()
+search_bar.setPlaceholderText("Search instances...")
+search_bar.textChanged.connect(lambda: filter_instances(search_bar,content_layout,search_bar.text()))
+
 # Main Area
 middle = QHBoxLayout()
 middle.setContentsMargins(0, 0, 0, 0)
 middle.setSpacing(0)
 root.addLayout(middle)
+left_side = QVBoxLayout()
+middle.addLayout(left_side)
+left_side.addWidget(search_bar)
+
+sort_box = QComboBox()
+sort_box.addItems(["A–Z", "Z–A", "Newest", "Oldest"])
+sort_box.currentIndexChanged.connect(lambda: apply_sort(sort_box, load_instances()))
+left_side.addWidget(sort_box)
+
 
 content = QWidget()
 content.setStyleSheet("background-color: rgb(32, 35, 38);")
 scroll = QScrollArea()
 scroll.setWidgetResizable(True)
 
+
 content = QWidget()
 content_layout = QGridLayout(content)
 
 scroll.setWidget(content)
-middle.addWidget(scroll)
+left_side.addWidget(scroll)
 
 content_layout.setAlignment(Qt.AlignTop | Qt.AlignLeft)
 content_layout.setContentsMargins(10, 10, 10, 10)
@@ -837,8 +1064,8 @@ rename_box.setAlignment(Qt.AlignHCenter)
 rename_box.hide()
 text_label.setStyleSheet("color: white; font-size: 16px;")
 text_label.setAlignment(Qt.AlignHCenter)
-text_label.mousePressEvent = lambda _: enable_rename()
-rename_box.returnPressed.connect(finish_rename)
+text_label.mousePressEvent = lambda _: enable_rename(selected_instance)
+rename_box.returnPressed.connect(lambda: finish_rename(selected_instance,rename_box.text()))
 
 
 # Play Button
