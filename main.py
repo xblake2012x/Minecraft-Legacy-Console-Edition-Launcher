@@ -13,6 +13,10 @@ import shutil
 from PySide6.QtGui import QFontMetrics
 import threading
 
+settings = {}
+with open("Launcher_Settings.json") as f:
+    settings = json.load(f)
+
 class LogEmitter(QObject):
     new_line = Signal(str)
 
@@ -60,7 +64,24 @@ def check_for_launcher_updates(window):
     elif status == "Invalid Meta Data":
         status_label.setText("Launcher_Data.json or github version meta data was invalid")
 
+def save_settings(window,json_file):
+    global settings
+
+    settings["Theme"] = window.findChild(QComboBox, "Theme").currentText()
+    settings["Close Launcher Startup"] = window.findChild(QCheckBox, "Close Launcher Startup").isChecked()
+    settings["Instance Path"] = window.findChild(QLineEdit, "Instance Path").text()
+
+    with open(json_file, "w") as f:
+        json.dump(settings,f,indent=4)
+
+    load_instances()
+
 def open_settings_window():
+    settings_file = "Launcher_Settings.json"
+    settings = {}
+    with open(settings_file) as f:
+        settings = json.load(f)
+
     win = QWidget()
     win.setWindowTitle("Settings")
     win.resize(800, 500)
@@ -71,12 +92,33 @@ def open_settings_window():
     layout.setSpacing(0)
 
     # LEFT: Category list
+    Left_List = QVBoxLayout()
     category_list = QListWidget()
     category_list.addItems(["Launcher", "Minecraft", "Updates"])
     category_list.setFixedWidth(150)
     category_list.setStyleSheet("color: white; background-color: rgb(24, 26, 27);")
-    layout.addWidget(category_list)
+    save_btn = QPushButton("Save Settings")
+    save_btn.setFixedHeight(40)
+    save_btn.setStyleSheet("""
+            QPushButton {
+                background-color: rgb(45, 48, 50);
+                color: white;
+                border: 1px solid rgb(60, 63, 65);
+                border-radius: 6px;
+                font-size: 14px;
+            }
+            QPushButton:hover {
+                background-color: rgb(55, 58, 60);
+            }
+            QPushButton:pressed {
+                background-color: rgb(35, 38, 40);
+            }
+        """)
+    save_btn.clicked.connect(lambda: save_settings(win,settings_file))
 
+    Left_List.addWidget(category_list)
+    Left_List.addWidget(save_btn)
+    layout.addLayout(Left_List)
     # MIDDLE: Sub-tabs
     subtab_list = QListWidget()
     subtab_list.setFixedWidth(150)
@@ -87,14 +129,15 @@ def open_settings_window():
     settings_stack = QStackedWidget()
     layout.addWidget(settings_stack)
 
-    error_page = QWidget()
-    settings_stack.addWidget(error_page)
-    pages = ["launcher_graphics","minecraft_general","minecraft_paths","updates_launcher"]
+    pages = ["launcher_graphics","minecraft_general","minecraft_paths","updates_launcher","error_page"]
     setting_pages = {}
     for page in pages:
         setting_pages[page] = QWidget()
     for page in setting_pages.values():
         settings_stack.addWidget(page)
+    error_page = QVBoxLayout(setting_pages["error_page"])
+    error_label = QLabel("Error, this sub-category do not have a page, update your launcher if possible")
+    error_page.addWidget(error_label)
 
     # Launcher Graphics Sub Category
     graphics_layout = QVBoxLayout(setting_pages["launcher_graphics"])
@@ -106,8 +149,10 @@ def open_settings_window():
     graphics_layout.addWidget(theme_label)
 
     theme_dropdown = QComboBox()
+    theme_dropdown.setObjectName("Theme")
     theme_dropdown.addItems(["Dark", "Light"])
     theme_dropdown.setStyleSheet("color: white; background-color: rgb(45,48,50);")
+    theme_dropdown.setCurrentText(settings.get("Theme","Dark"))
     graphics_layout.addWidget(theme_dropdown)
     graphics_layout.addStretch()
 
@@ -116,8 +161,9 @@ def open_settings_window():
     minecraft_general_layout.setContentsMargins(20, 20, 20, 20)
     minecraft_general_layout.setSpacing(15)
 
-    bootup_label = QCheckBox("Maximise on bootup")
-    bootup_label.setChecked(True)
+    bootup_label = QCheckBox("Close Launcher when the game starts")
+    bootup_label.setObjectName("Close Launcher Startup")
+    bootup_label.setChecked(settings.get("Close Launcher Startup",False))
     bootup_label.setStyleSheet("color: white; font-size: 14px;")
     minecraft_general_layout.addWidget(bootup_label)
 
@@ -132,9 +178,10 @@ def open_settings_window():
     minecraft_path_layout.addWidget(path_label)
 
     path_input = QLineEdit()
+    path_input.setObjectName("Instance Path")
     path_input.setPlaceholderText("Enter path...")
     path_input.setStyleSheet("color: white; background-color: rgb(45,48,50);")
-    path_input.setText("Instances/")
+    path_input.setText(settings.get("Instance Path","Instances/"))
     minecraft_path_layout.addWidget(path_input)
 
     minecraft_path_layout.addStretch()
@@ -173,6 +220,7 @@ def open_settings_window():
 
     # When category changes, update sub-tabs
     def update_subtabs():
+        save_index = subtab_list.currentRow()
         subtab_list.clear()
         cat = category_list.currentItem().text()
 
@@ -182,6 +230,11 @@ def open_settings_window():
             subtab_list.addItems(["General", "Paths"])
         elif cat == "Updates":
             subtab_list.addItems(["Launcher"])
+
+        if subtab_list.count() - 1 >= save_index and save_index > -1:
+            subtab_list.setCurrentRow(save_index)
+        elif subtab_list.count() > 0:
+            subtab_list.setCurrentRow(0)
 
     category_list.currentRowChanged.connect(update_subtabs)
 
@@ -196,7 +249,7 @@ def open_settings_window():
         if page_id in setting_pages:
             settings_stack.setCurrentWidget(setting_pages[page_id])
         else:
-            settings_stack.setCurrentWidget(error_page)
+            settings_stack.setCurrentWidget(setting_pages["error_page"])
 
     subtab_list.currentRowChanged.connect(update_page)
 
@@ -233,8 +286,6 @@ def open_logs_window(name):
 
     return log_win, log_box, emitter
 
-
-
 def open_instance_folder(inst):
     folder = os.path.dirname(os.path.dirname(inst["Path"]))
 
@@ -262,7 +313,6 @@ def enable_rename():
     text_label.hide()
     rename_box.show()
     rename_box.setFocus()
-
 
 def finish_rename():
     global selected_instance
@@ -472,7 +522,7 @@ def download_and_extract_repo(url, extract_to, instance_name, progress_bar, stat
             "Name": instance_name,
             "Path": os.path.join(minecraft_path, "Minecraft.Client.exe"),
             "Icon": icon_dest,
-            "Args": [],
+            "Args": "",
             "WinePrefix": ""
         }
 
@@ -532,7 +582,8 @@ open_windows = []
 def launch_game(instance_json):
     print("Launching Minecraft...")
     command = []
-    log_win, log_box, emitter = open_logs_window(instance_json.get("Name","Unknown"))
+    if not settings.get("Close Launcher Startup",False) or settings.get("Open Logs Startup",True):
+        log_win, log_box, emitter = open_logs_window(instance_json.get("Name","Unknown"))
     print(f"Detected platform:{sys.platform}")
     if not instance_json["Path"] is None:
         exe_path = instance_json["Path"]
@@ -573,13 +624,17 @@ def launch_game(instance_json):
     stderr=subprocess.STDOUT,
     text=True)
 
-    def read_output():
-        for line in proc.stdout:
-            if log_win.closed:
-                break
-            emitter.new_line.emit(line.rstrip())
+    if not settings.get("Close Launcher Startup",False) or settings.get("Open Logs Startup",True):
+        def read_output():
+            for line in proc.stdout:
+                if log_win.closed:
+                    break
+                emitter.new_line.emit(line.rstrip())
 
-    threading.Thread(target=read_output, daemon=True).start()
+        threading.Thread(target=read_output, daemon=True).start()
+
+    if settings.get("Close Launcher Startup",False):
+        window.close()
 
 def open_add_instance_window():
     print('making window')
@@ -630,7 +685,7 @@ def open_add_instance_window():
         }
     """)
     add_button.clicked.connect(
-        lambda: download_and_extract_repo(url, f"Instances/", name_input.text(), progress, status)
+        lambda: download_and_extract_repo(url, settings.get("Instance Path","Instances/"), name_input.text(), progress, status)
     )
 
     # Status Text
