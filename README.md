@@ -24,6 +24,8 @@ I just like cheese.
 I'm a solo dev with school.  
 If something breaks, tell me with contacts, and dont be a jerk about it, if so I will ignore you
 
+I might add a way to donate me later, when I get a way to have molah
+
 ---
 
 ## Contacts
