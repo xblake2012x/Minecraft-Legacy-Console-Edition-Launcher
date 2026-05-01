@@ -1,6 +1,6 @@
 from logging import exception
 from PySide6.QtWidgets import QApplication, QWidget, QVBoxLayout, QHBoxLayout, QComboBox, QCheckBox
-from PySide6.QtWidgets import QLabel, QPushButton, QProgressBar, QLineEdit, QGridLayout, QScrollArea, QTextEdit, QListWidget, QStackedWidget, QMessageBox
+from PySide6.QtWidgets import QLabel, QPushButton, QProgressBar, QLineEdit, QGridLayout, QScrollArea, QTextEdit, QListWidget, QStackedWidget, QMessageBox, QMenu
 from PySide6.QtGui import QPixmap, Qt
 from PySide6.QtCore import Signal, QObject
 import subprocess
@@ -323,25 +323,23 @@ def delete_instance(inst):
     text_label.setText("Nothing Selected")
     refresh_instance_buttons()
 
-def enable_rename():
-    if selected_instance["Name"] == "None":
+def enable_rename(inst):
+    if inst["Name"] == "None":
         return
 
-    rename_box.setText(selected_instance["Name"])
+    rename_box.setText(inst["Name"])
     text_label.hide()
     rename_box.show()
     rename_box.setFocus()
 
-def finish_rename():
-    global selected_instance
-
-    new_name = rename_box.text().strip()
+def finish_rename(inst, new_name):
+    new_name = new_name.strip()
     if not new_name:
         rename_box.hide()
         text_label.show()
         return
 
-    old_name = selected_instance["Name"]
+    old_name = inst["Name"]
     old_dir = os.path.join("Instances", old_name)
     new_dir = os.path.join("Instances", new_name)
 
@@ -350,13 +348,13 @@ def finish_rename():
         os.rename(old_dir, new_dir)
 
     # update JSON paths
-    selected_instance["Name"] = new_name
-    selected_instance["Icon"] = os.path.join(new_dir, "icon.png")
-    selected_instance["Path"] = os.path.join(new_dir, "minecraft", "Minecraft.Client.exe")
+    inst["Name"] = new_name
+    inst["Icon"] = os.path.join(new_dir, "icon.png")
+    inst["Path"] = os.path.join(new_dir, "minecraft", "Minecraft.Client.exe")
 
     # write updated JSON
     with open(os.path.join(new_dir, "instance.json"), "w") as f:
-        json.dump(selected_instance, f, indent=4)
+        json.dump(inst, f, indent=4)
 
     # update UI
     text_label.setText(new_name)
@@ -391,6 +389,33 @@ def select_instance(inst):
     text_label.setText(inst["Name"])
     pixmap = QPixmap(inst["Icon"])
     img_label.setPixmap(pixmap)
+    refresh_instance_buttons()
+
+def duplicate_instance(inst):
+    old_name = inst["Name"]
+    base = "Instances"
+
+    new_name = old_name + "_Copy"
+    new_dir = os.path.join(base, new_name)
+
+    i = 1
+    while os.path.exists(new_dir):
+        new_name = f"{old_name}_Copy{i}"
+        new_dir = os.path.join(base, new_name)
+        i += 1
+
+    shutil.copytree(os.path.join(base, old_name), new_dir)
+
+    json_path = os.path.join(new_dir, "instance.json")
+    with open(json_path, "r") as f:
+        data = json.load(f)
+
+    data["Name"] = new_name
+    data["Created"] = time.time()
+
+    with open(json_path, "w") as f:
+        json.dump(data, f, indent=4)
+
     refresh_instance_buttons()
 
 
@@ -454,8 +479,49 @@ def create_instance_tile(inst):
     layout.addWidget(inner, alignment=Qt.AlignHCenter)
 
     # click handler
+    def mousePress(event, inst=inst):
+        if event.button() == Qt.RightButton:
+            select_instance(inst)
+            menu = QMenu()
+
+            separators = []
+            title = menu.addSection(inst.get("Name", "Unknown"))
+            rename = menu.addAction("Rename")
+            separators.append(menu.addSeparator())
+            play = menu.addAction("Play")
+            separators.append(menu.addSeparator())
+            edit = menu.addAction("Edit")
+            duplicate = menu.addAction("Duplicate")
+            open_folder = menu.addAction("Open Folder")
+            delete = menu.addAction("Delete")
+
+            action = menu.exec(w.mapToGlobal(event.position().toPoint()))
+
+            if action == play:
+                launch_game(inst)
+
+            elif action == edit:
+                select_instance(inst)
+                open_edit_instance_window()
+
+            elif action == duplicate:
+                duplicate_instance(inst)
+
+            elif action == open_folder:
+                open_instance_folder(inst)
+
+            elif action == delete:
+                delete_instance(inst)
+
+            elif action == rename:
+                enable_rename(inst)
+
+        else:
+            # Left click = select instance
+            select_instance(inst)
+
+    w.mousePressEvent = mousePress
     w.instance_name = inst["Name"]
-    w.mousePressEvent = lambda _, i=inst: select_instance(i)
 
     return w
 
@@ -998,8 +1064,8 @@ rename_box.setAlignment(Qt.AlignHCenter)
 rename_box.hide()
 text_label.setStyleSheet("color: white; font-size: 16px;")
 text_label.setAlignment(Qt.AlignHCenter)
-text_label.mousePressEvent = lambda _: enable_rename()
-rename_box.returnPressed.connect(finish_rename)
+text_label.mousePressEvent = lambda _: enable_rename(selected_instance)
+rename_box.returnPressed.connect(lambda: finish_rename(selected_instance,rename_box.text()))
 
 
 # Play Button
