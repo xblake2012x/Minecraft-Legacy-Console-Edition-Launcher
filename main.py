@@ -22,49 +22,113 @@ with open("Launcher_Settings.json") as f:
 class LogEmitter(QObject):
     new_line = Signal(str)
 
-def check_update():
-    try:
-        with open("Launcher_Data.json") as f:
-            data = json.load(f)
-        url = data["Check Update Link"]
-    except:
-        return "Invalid Launcher Data File"
+def perform_launcher_update(window, download_url):
+    status_label = window.findChild(QLabel, "status_label")
+    status_label.setText("Updating... Please  do not close the launcher.")
+    status_label.show()
 
-    try:
-        with urllib.request.urlopen(url) as response:
-            datedversion = json.load(response)
-    except:
-        return "Cant Reach"
+    def update_thread():
+        try:
+            zip_path = "launcher_update.zip"
+            # Download
+            with urllib.request.urlopen(download_url) as response, open(zip_path, 'wb') as out_file:
+                shutil.copyfileobj(response, out_file)
+            
+            # Extract
+            with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                zip_ref.extractall(".")
+            
+            os.remove(zip_path)
+            
+            # Restart notice
+            status_label.setText("Update complete! Restarting...")
+            time.sleep(2)
+            
+            # Restart the application
+            python = sys.executable
+            os.execl(python, python, *sys.argv)
+        except Exception as e:
+            status_label.setText(f"Update failed: {str(e)}")
 
-    try:
-        data = data["Version"].split('.')
-        datedversion = datedversion["Version"].split('.')
-        for i, char in enumerate(data):
-            if int(char) > int(datedversion[i]):
-                return "Not Valid Local Data"
-            elif int(datedversion[i]) > int(char):
-                return False
-        return True
-    except:
-        return "Invalid Meta Data"
+    threading.Thread(target=update_thread).start()
 
 def check_for_launcher_updates(window):
     status_label = window.findChild(QLabel, "status_label")
-    status_label.setText("Checking")
+    update_btn = window.findChild(QPushButton, "launcher_update_btn")
+    if update_btn:
+        update_btn.hide()
+
+    status_label.setText("Checking...")
     status_label.show()
-    status = check_update()
-    if status == True:
-        status_label.setText("Up To Date")
-    elif status == False:
-        status_label.setText("Need to be updated")
-    elif status == "Invalid Launcher Data File":
-        status_label.setText("Reading Launcher_Data.json ran into an error")
-    elif status == "Cant Reach":
-        status_label.setText("Couldn\'t reach the set update link in Launcher_Data.json Check you\'r internet and try again")
-    elif status == "Not Valid Local Data":
-        status_label.setText("Launcher_Data.json states version higher than github version")
-    elif status == "Invalid Meta Data":
-        status_label.setText("Launcher_Data.json or github version meta data was invalid")
+    
+    try:
+        if os.path.exists(DATA_FILE):
+            with open(DATA_FILE) as f:
+                local_data = json.load(f)
+        else:
+            # Fallback if Data.json is missing
+            local_data = {"Version": "0.0.0", "Check Update Link": "https://raw.githubusercontent.com/xblake2012x/Minecraft-Legacy-Console-Edition-Launcher/main/Launcher_Data.json"}
+        
+        url = local_data["Check Update Link"]
+        with urllib.request.urlopen(url) as response:
+            remote_data = json.load(response)
+    except Exception as e:
+        status_label.setText(f"Error checking updates: {str(e)}")
+        return
+
+    local_version = local_data.get("Version", "0.0.0").split('.')
+    remote_version = remote_data.get("Version", "0.0.0").split('.')
+    
+    is_newer = False
+    for i in range(max(len(local_version), len(remote_version))):
+        v1 = int(local_version[i]) if i < len(local_version) else 0
+        v2 = int(remote_version[i]) if i < len(remote_version) else 0
+        if v2 > v1:
+            is_newer = True
+            break
+        elif v1 > v2:
+            break
+
+    if is_newer:
+        status_label.setText(f"Update available: {remote_data.get('Version')}")
+        if update_btn and "Download URL" in remote_data:
+            update_btn.show()
+            # Disconnect previous if any
+            try: update_btn.clicked.disconnect()
+            except: pass
+            update_btn.clicked.connect(lambda: perform_launcher_update(window, remote_data["Download URL"]))
+    else:
+        status_label.setText("Launcher is up to date.")
+
+def apply_sort_logic(mode, instances):
+    if mode == "A–Z":
+        instances.sort(key=lambda x: x.get("Name", "No Name").lower())
+    elif mode == "Z–A":
+        instances.sort(key=lambda x: x.get("Name", "No Name").lower(), reverse=True)
+    elif mode == "Newest":
+        instances.sort(key=lambda x: float(x.get("Created", 0)), reverse=True)
+    elif mode == "Oldest":
+        instances.sort(key=lambda x: float(x.get("Created", 0)))
+
+def apply_sort(sort_box, instances):
+    mode = sort_box.currentText()
+    apply_sort_logic(mode, instances)
+    refresh_instance_buttons(instances)
+
+
+def save_settings(window,json_file):
+    global settings
+    global app
+
+    settings["Theme"] = window.findChild(QComboBox, "Theme").currentText()
+    settings["Close Launcher Startup"] = window.findChild(QCheckBox, "Close Launcher Startup").isChecked()
+    settings["Instance Path"] = window.findChild(QLineEdit, "Instance Path").text()
+
+    with open(json_file, "w") as f:
+        json.dump(settings,f,indent=4)
+
+    apply_theme(app, settings["Theme"])
+    refresh_instance_buttons()
 
 def apply_sort_logic(mode, instances):
     if mode == "A–Z":
@@ -103,7 +167,6 @@ def open_settings_window():
     win = QWidget()
     win.setWindowTitle("Settings")
     win.resize(800, 500)
-    win.setStyleSheet("background-color: rgb(32, 35, 38);")
 
     layout = QHBoxLayout(win)
     layout.setContentsMargins(0, 0, 0, 0)
@@ -112,6 +175,7 @@ def open_settings_window():
     # LEFT: Category list
     Left_List = QVBoxLayout()
     category_list = QListWidget()
+    category_list.setObjectName("categoryList")
     category_list.addItems(["Launcher", "Minecraft", "Updates"])
     category_list.setFixedWidth(150)
     category_list.setStyleSheet("color: white; background-color: rgb(24, 26, 27);")
@@ -139,8 +203,8 @@ def open_settings_window():
     layout.addLayout(Left_List)
     # MIDDLE: Sub-tabs
     subtab_list = QListWidget()
+    subtab_list.setObjectName("subtabList")
     subtab_list.setFixedWidth(150)
-    subtab_list.setStyleSheet("color: white; background-color: rgb(27, 30, 32);")
     layout.addWidget(subtab_list)
 
     # RIGHT: Settings panel (stacked pages)
@@ -163,7 +227,7 @@ def open_settings_window():
     graphics_layout.setSpacing(15)
 
     theme_label = QLabel("Theme")
-    theme_label.setStyleSheet("color: white; font-size: 14px;")
+    theme_label.setStyleSheet("font-size: 14px;")
     graphics_layout.addWidget(theme_label)
 
     theme_dropdown = QComboBox()
@@ -214,23 +278,14 @@ def open_settings_window():
     status_label.hide()
     updates_launcher_layout.addWidget(status_label)
 
+    update_now_btn = QPushButton("Update Now")
+    update_now_btn.setObjectName("launcher_update_btn")
+    update_now_btn.setFixedHeight(40)
+    update_now_btn.hide()
+    updates_launcher_layout.addWidget(update_now_btn)
+
     btn = QPushButton("Check for updates")
     btn.setFixedHeight(40)
-    btn.setStyleSheet("""
-        QPushButton {
-            background-color: rgb(45, 48, 50);
-            color: white;
-            border: 1px solid rgb(60, 63, 65);
-            border-radius: 6px;
-            font-size: 14px;
-        }
-        QPushButton:hover {
-            background-color: rgb(55, 58, 60);
-        }
-        QPushButton:pressed {
-            background-color: rgb(35, 38, 40);
-        }
-    """)
     btn.clicked.connect(lambda: check_for_launcher_updates(win))
     updates_launcher_layout.addWidget(btn)
 
@@ -255,6 +310,7 @@ def open_settings_window():
             subtab_list.setCurrentRow(0)
 
     category_list.currentRowChanged.connect(update_subtabs)
+    category_list.setCurrentRow(0)
 
     # When sub-tab changes, switch pages
     def update_page():
@@ -305,6 +361,8 @@ def open_logs_window(name):
     return log_win, log_box, emitter
 
 def open_instance_folder(inst):
+    if not inst or not inst.get("Path"):
+        return
     folder = os.path.dirname(os.path.dirname(inst["Path"]))
 
     if sys.platform.startswith("linux"):
@@ -316,6 +374,8 @@ def open_instance_folder(inst):
 
 def delete_instance(inst):
     global selected_instance
+    if not inst or not inst.get("Path"):
+        return
     folder = os.path.dirname(os.path.dirname(inst["Path"]))
     if os.path.exists(folder):
         shutil.rmtree(folder)
@@ -377,7 +437,11 @@ elif sys.platform.startswith("win"):
     print("Running on Windows")
 elif sys.platform.startswith("darwin"):
     print("Running on macOS")
-selected_instance = {"Name": "None", "Path": None, "Icon": "Instances/icon.png", "Args": [], "WinePrefix": ""}
+
+# Use resource_path for the default icon which might be bundled
+DEFAULT_ICON = resource_path("Instances/icon.png")
+
+selected_instance = {"Name": "None", "Path": None, "Icon": DEFAULT_ICON, "Args": [], "WinePrefix": ""}
 url = "https://github.com/MCLCE/MinecraftConsoles/releases/download/nightly/LCEWindows64.zip"
 def select_instance(inst):
     global selected_instance
@@ -424,10 +488,10 @@ def create_instance_tile(inst):
     w.setFixedSize(120, 140)
 
     # selected highlight
-    if selected_instance == inst:
+    is_selected = (selected_instance.get("Path") == inst.get("Path")) if (selected_instance and inst) else False
+    if is_selected:
         w.setStyleSheet("""
             QWidget {
-                background-color: rgb(55, 58, 60);
                 border: 2px solid rgb(85, 170, 255);
                 border-radius: 6px;
             }
@@ -571,10 +635,17 @@ def refresh_instance_buttons(instances=None):
 
 def load_instances():
     instances = []
-    base = "Instances"
+    base = INSTANCES_BASE_DIR
 
     if not os.path.exists(base):
         os.makedirs(base, exist_ok=True)
+        # Copy default icon to Instances dir if it doesn't exist there yet
+        icon_dest = os.path.join(base, "icon.png")
+        if not os.path.exists(icon_dest):
+            try:
+                shutil.copy(resource_path("Instances/icon.png"), icon_dest)
+            except:
+                pass
         return instances
 
     for name in os.listdir(base):
@@ -616,8 +687,8 @@ def download_and_extract_repo(url, extract_to, instance_name, progress_bar, stat
 
         os.makedirs(instance_root, exist_ok=True)
 
-        icon_src = "Instances/icon.png"
-        icon_dest = f"Instances/{instance_name}/icon.png"
+        icon_src = resource_path("Instances/icon.png")
+        icon_dest = os.path.join(INSTANCES_BASE_DIR, instance_name, "icon.png")
 
         shutil.copy(icon_src, icon_dest)
 
@@ -940,11 +1011,11 @@ def open_edit_instance_window():
 
 
 app = QApplication([])
+apply_theme(app, settings.get("Theme", "Dark"))
 
 window = QWidget()
 window.setWindowTitle("Legacy Launcher")
 window.resize(850, 650)
-window.setStyleSheet("background-color: rgb(32, 35, 38);")
 
 root = QVBoxLayout()
 root.setContentsMargins(0, 0, 0, 0)
@@ -953,54 +1024,28 @@ window.setLayout(root)
 
 # Top Bar
 top_bar = QWidget()
+top_bar.setObjectName("topBar")
 top_bar_layout = QHBoxLayout(top_bar)
 top_bar.setFixedHeight(50)
-top_bar.setStyleSheet("background-color: rgb(27, 30, 32);")
 
 # Add Instance Button
 add_instance_button = QPushButton("Add Instance")
 add_instance_button.setFixedHeight(40)
-
-add_instance_button.setStyleSheet("""
-    QPushButton {
-        background-color: rgb(45, 48, 50);
-        color: white;
-        border: 1px solid rgb(60, 63, 65);
-        border-radius: 6px;
-        font-size: 14px;
-    }
-    QPushButton:hover {
-        background-color: rgb(55, 58, 60);
-    }
-    QPushButton:pressed {
-        background-color: rgb(35, 38, 40);
-    }
-""")
 add_instance_button.clicked.connect(open_add_instance_window)
 
 # Settings
 settings_button = QPushButton("Settings")
 settings_button.setFixedHeight(40)
-
-settings_button.setStyleSheet("""
-    QPushButton {
-        background-color: rgb(45, 48, 50);
-        color: white;
-        border: 1px solid rgb(60, 63, 65);
-        border-radius: 6px;
-        font-size: 14px;
-    }
-    QPushButton:hover {
-        background-color: rgb(55, 58, 60);
-    }
-    QPushButton:pressed {
-        background-color: rgb(35, 38, 40);
-    }
-""")
 settings_button.clicked.connect(open_settings_window)
+
+# About
+about_button = QPushButton("About")
+about_button.setFixedHeight(40)
+about_button.clicked.connect(open_about_window)
 
 top_bar_layout.addWidget(add_instance_button)
 top_bar_layout.addWidget(settings_button)
+top_bar_layout.addWidget(about_button)
 top_bar_layout.addStretch()
 
 root.addWidget(top_bar)
@@ -1025,7 +1070,6 @@ left_side.addWidget(sort_box)
 
 
 content = QWidget()
-content.setStyleSheet("background-color: rgb(32, 35, 38);")
 scroll = QScrollArea()
 scroll.setWidgetResizable(True)
 
@@ -1043,15 +1087,15 @@ refresh_instance_buttons()
 
 # Sidebar
 sidebar = QWidget()
+sidebar.setObjectName("sidebar")
 sidebar.setFixedWidth(200)
-sidebar.setStyleSheet("background-color: rgb(24, 26, 27);")
 sidebar_layout = QVBoxLayout(sidebar)
 sidebar_layout.setContentsMargins(0, 0, 0, 0)
 sidebar_layout.setSpacing(10)
 
 # Image
 img_label = QLabel()
-pixmap = QPixmap("Instances/icon.png")
+pixmap = QPixmap(DEFAULT_ICON)
 img_label.setPixmap(pixmap)
 img_label.setScaledContents(True)
 img_label.setMaximumHeight(200)
@@ -1059,10 +1103,8 @@ img_label.setMaximumHeight(200)
 # Text
 text_label = QLabel("Nothing Selected")
 rename_box = QLineEdit()
-rename_box.setStyleSheet("color: white; font-size: 16px;")
 rename_box.setAlignment(Qt.AlignHCenter)
 rename_box.hide()
-text_label.setStyleSheet("color: white; font-size: 16px;")
 text_label.setAlignment(Qt.AlignHCenter)
 text_label.mousePressEvent = lambda _: enable_rename(selected_instance)
 rename_box.returnPressed.connect(lambda: finish_rename(selected_instance,rename_box.text()))
@@ -1071,85 +1113,21 @@ rename_box.returnPressed.connect(lambda: finish_rename(selected_instance,rename_
 # Play Button
 play_button = QPushButton("Play")
 play_button.setFixedHeight(40)
-
-play_button.setStyleSheet("""
-    QPushButton {
-        background-color: rgb(45, 48, 50);
-        color: white;
-        border: 1px solid rgb(60, 63, 65);
-        border-radius: 6px;
-        font-size: 14px;
-    }
-    QPushButton:hover {
-        background-color: rgb(55, 58, 60);
-    }
-    QPushButton:pressed {
-        background-color: rgb(35, 38, 40);
-    }
-""")
 play_button.clicked.connect(lambda: launch_game(selected_instance))
 
 # Delete Button
 delete_button = QPushButton("Delete")
 delete_button.setFixedHeight(40)
-
-delete_button.setStyleSheet("""
-    QPushButton {
-        background-color: rgb(45, 48, 50);
-        color: white;
-        border: 1px solid rgb(60, 63, 65);
-        border-radius: 6px;
-        font-size: 14px;
-    }
-    QPushButton:hover {
-        background-color: rgb(55, 58, 60);
-    }
-    QPushButton:pressed {
-        background-color: rgb(35, 38, 40);
-    }
-""")
 delete_button.clicked.connect(lambda: delete_instance(selected_instance))
 
 # Open Instance Folder
 open_instance_folder_button = QPushButton("Open Folder")
 open_instance_folder_button.setFixedHeight(40)
-
-open_instance_folder_button.setStyleSheet("""
-    QPushButton {
-        background-color: rgb(45, 48, 50);
-        color: white;
-        border: 1px solid rgb(60, 63, 65);
-        border-radius: 6px;
-        font-size: 14px;
-    }
-    QPushButton:hover {
-        background-color: rgb(55, 58, 60);
-    }
-    QPushButton:pressed {
-        background-color: rgb(35, 38, 40);
-    }
-""")
 open_instance_folder_button.clicked.connect(lambda: open_instance_folder(selected_instance))
 
 # Edit
 edit_button = QPushButton("Edit")
 edit_button.setFixedHeight(40)
-
-edit_button.setStyleSheet("""
-    QPushButton {
-        background-color: rgb(45, 48, 50);
-        color: white;
-        border: 1px solid rgb(60, 63, 65);
-        border-radius: 6px;
-        font-size: 14px;
-    }
-    QPushButton:hover {
-        background-color: rgb(55, 58, 60);
-    }
-    QPushButton:pressed {
-        background-color: rgb(35, 38, 40);
-    }
-""")
 edit_button.clicked.connect(open_edit_instance_window)
 
 # Add Widgets
