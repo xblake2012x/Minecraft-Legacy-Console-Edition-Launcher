@@ -1,6 +1,6 @@
 from logging import exception
 from PySide6.QtWidgets import QApplication, QWidget, QVBoxLayout, QHBoxLayout, QComboBox, QCheckBox
-from PySide6.QtWidgets import QLabel, QPushButton, QProgressBar, QLineEdit, QGridLayout, QScrollArea, QTextEdit, QListWidget, QStackedWidget, QMessageBox, QMenu, QDialog
+from PySide6.QtWidgets import QLabel, QPushButton, QProgressBar, QLineEdit, QGridLayout, QScrollArea, QTextEdit, QListWidget, QStackedWidget, QMessageBox, QMenu
 from PySide6.QtGui import QPixmap, Qt
 from PySide6.QtCore import Signal, QObject
 import subprocess
@@ -15,100 +15,9 @@ from PySide6.QtGui import QFontMetrics
 import threading
 import time
 
-def resource_path(relative_path):
-    """ Get absolute path to resource, works for dev and for PyInstaller """
-    try:
-        # PyInstaller creates a temp folder and stores path in _MEIPASS
-        base_path = sys._MEIPASS
-    except Exception:
-        base_path = os.path.dirname(os.path.abspath(__file__))
-
-    return os.path.join(base_path, relative_path)
-
-def get_executable_dir():
-    """ Get the directory where the executable (or script) is located """
-    if getattr(sys, 'frozen', False):
-        return os.path.dirname(sys.executable)
-    return os.path.dirname(os.path.abspath(__file__))
-
-# Use get_executable_dir() for config files that should persist beside the exe
-CONFIG_DIR = get_executable_dir()
-SETTINGS_FILE = os.path.join(CONFIG_DIR, "Launcher_Settings.json")
-DATA_FILE = os.path.join(CONFIG_DIR, "Launcher_Data.json")
-INSTANCES_BASE_DIR = os.path.join(CONFIG_DIR, "Instances")
-
 settings = {}
-if os.path.exists(SETTINGS_FILE):
-    with open(SETTINGS_FILE) as f:
-        settings = json.load(f)
-else:
-    # Default settings if file doesn't exist
-    settings = {
-        "Theme": "Dark",
-        "Instance Path": "Instances/",
-        "Close Launcher Startup": False
-    }
-    with open(SETTINGS_FILE, "w") as f:
-        json.dump(settings, f, indent=4)
-
-def get_theme_stylesheet(theme_name):
-    if theme_name == "Light":
-        return """
-            QWidget { background-color: rgb(240, 240, 240); color: black; }
-            QPushButton { background-color: rgb(225, 225, 225); color: black; border: 1px solid rgb(200, 200, 200); border-radius: 6px; font-size: 14px; }
-            QPushButton:hover { background-color: rgb(210, 210, 210); }
-            QPushButton:pressed { background-color: rgb(190, 190, 190); }
-            QLineEdit, QComboBox, QListWidget, QTextEdit { background-color: white; color: black; border: 1px solid rgb(200, 200, 200); }
-            QScrollArea { border: none; }
-            #topBar { background-color: rgb(220, 220, 220); }
-            #sidebar { background-color: rgb(230, 230, 230); }
-            #categoryList { background-color: rgb(220, 220, 220); }
-            #subtabList { background-color: rgb(210, 210, 210); }
-        """
-    else: # Dark
-        return """
-            QWidget { background-color: rgb(32, 35, 38); color: white; }
-            QPushButton { background-color: rgb(45, 48, 50); color: white; border: 1px solid rgb(60, 63, 65); border-radius: 6px; font-size: 14px; }
-            QPushButton:hover { background-color: rgb(55, 58, 60); }
-            QPushButton:pressed { background-color: rgb(35, 38, 40); }
-            QLineEdit, QComboBox, QListWidget, QTextEdit { background-color: rgb(45, 48, 50); color: white; border: 1px solid rgb(60, 63, 65); }
-            QScrollArea { border: none; }
-            #topBar { background-color: rgb(27, 30, 32); }
-            #sidebar { background-color: rgb(24, 26, 27); }
-            #categoryList { background-color: rgb(24, 26, 27); }
-            #subtabList { background-color: rgb(27, 30, 32); }
-        """
-
-def apply_theme(app_or_widget, theme_name):
-    app_or_widget.setStyleSheet(get_theme_stylesheet(theme_name))
-
-def open_about_window():
-    about = QDialog()
-    about.setWindowTitle("About")
-    about.setFixedSize(500, 220)
-
-    layout = QVBoxLayout()
-
-    text = QLabel("""
-        <b>Legacy Console Edition Launcher</b><br>
-        the peakest of the peakest launchers (probably not).<br><br>
-        Made by Blake because no one else wanted to make one and I got bored.<br>
-        If something breaks, contact me or make a github issue, and dont be a jerk.<br><br>
-        Github: https://github.com/xblake2012x/Minecraft-Legacy-Console-Edition-Launcher
-        Discord: xblake.2012x<br>
-        Email: Blake_Brent@outlook.com
-        """)
-    text.setAlignment(Qt.AlignCenter)
-    text.setWordWrap(True)
-
-    close_btn = QPushButton("Close")
-    close_btn.clicked.connect(about.close)
-
-    layout.addWidget(text)
-    layout.addWidget(close_btn)
-    about.setLayout(layout)
-    about.exec()
-
+with open("Launcher_Settings.json") as f:
+    settings = json.load(f)
 
 class LogEmitter(QObject):
     new_line = Signal(str)
@@ -221,13 +130,39 @@ def save_settings(window,json_file):
     apply_theme(app, settings["Theme"])
     refresh_instance_buttons()
 
-def open_settings_window():
-    settings_file = SETTINGS_FILE
-    # Re-load to ensure we have latest
+def apply_sort_logic(mode, instances):
+    if mode == "A–Z":
+        instances.sort(key=lambda x: x.get("Name", "No Name").lower())
+    elif mode == "Z–A":
+        instances.sort(key=lambda x: x.get("Name", "No Name").lower(), reverse=True)
+    elif mode == "Newest":
+        instances.sort(key=lambda x: float(x.get("Created", 0)), reverse=True)
+    elif mode == "Oldest":
+        instances.sort(key=lambda x: float(x.get("Created", 0)))
+
+def apply_sort(sort_box, instances):
+    mode = sort_box.currentText()
+    apply_sort_logic(mode, instances)
+    refresh_instance_buttons(instances)
+
+
+def save_settings(window,json_file):
     global settings
-    if os.path.exists(settings_file):
-        with open(settings_file) as f:
-            settings = json.load(f)
+
+    settings["Theme"] = window.findChild(QComboBox, "Theme").currentText()
+    settings["Close Launcher Startup"] = window.findChild(QCheckBox, "Close Launcher Startup").isChecked()
+    settings["Instance Path"] = window.findChild(QLineEdit, "Instance Path").text()
+
+    with open(json_file, "w") as f:
+        json.dump(settings,f,indent=4)
+
+    load_instances()
+
+def open_settings_window():
+    settings_file = "Launcher_Settings.json"
+    settings = {}
+    with open(settings_file) as f:
+        settings = json.load(f)
 
     win = QWidget()
     win.setWindowTitle("Settings")
@@ -243,12 +178,26 @@ def open_settings_window():
     category_list.setObjectName("categoryList")
     category_list.addItems(["Launcher", "Minecraft", "Updates"])
     category_list.setFixedWidth(150)
-    
-    # Save Button
+    category_list.setStyleSheet("color: white; background-color: rgb(24, 26, 27);")
     save_btn = QPushButton("Save Settings")
     save_btn.setFixedHeight(40)
+    save_btn.setStyleSheet("""
+            QPushButton {
+                background-color: rgb(45, 48, 50);
+                color: white;
+                border: 1px solid rgb(60, 63, 65);
+                border-radius: 6px;
+                font-size: 14px;
+            }
+            QPushButton:hover {
+                background-color: rgb(55, 58, 60);
+            }
+            QPushButton:pressed {
+                background-color: rgb(35, 38, 40);
+            }
+        """)
     save_btn.clicked.connect(lambda: save_settings(win,settings_file))
-    
+
     Left_List.addWidget(category_list)
     Left_List.addWidget(save_btn)
     layout.addLayout(Left_List)
@@ -284,8 +233,8 @@ def open_settings_window():
     theme_dropdown = QComboBox()
     theme_dropdown.setObjectName("Theme")
     theme_dropdown.addItems(["Dark", "Light"])
+    theme_dropdown.setStyleSheet("color: white; background-color: rgb(45,48,50);")
     theme_dropdown.setCurrentText(settings.get("Theme","Dark"))
-    theme_dropdown.currentTextChanged.connect(lambda t: apply_theme(app, t))
     graphics_layout.addWidget(theme_dropdown)
     graphics_layout.addStretch()
 
@@ -297,7 +246,7 @@ def open_settings_window():
     bootup_label = QCheckBox("Close Launcher when the game starts")
     bootup_label.setObjectName("Close Launcher Startup")
     bootup_label.setChecked(settings.get("Close Launcher Startup",False))
-    bootup_label.setStyleSheet("font-size: 14px;")
+    bootup_label.setStyleSheet("color: white; font-size: 14px;")
     minecraft_general_layout.addWidget(bootup_label)
 
     minecraft_general_layout.addStretch()
@@ -313,6 +262,7 @@ def open_settings_window():
     path_input = QLineEdit()
     path_input.setObjectName("Instance Path")
     path_input.setPlaceholderText("Enter path...")
+    path_input.setStyleSheet("color: white; background-color: rgb(45,48,50);")
     path_input.setText(settings.get("Instance Path","Instances/"))
     minecraft_path_layout.addWidget(path_input)
 
@@ -450,8 +400,8 @@ def finish_rename(inst, new_name):
         return
 
     old_name = inst["Name"]
-    old_dir = os.path.join(INSTANCES_BASE_DIR, old_name)
-    new_dir = os.path.join(INSTANCES_BASE_DIR, new_name)
+    old_dir = os.path.join("Instances", old_name)
+    new_dir = os.path.join("Instances", new_name)
 
     # rename folder
     if os.path.exists(old_dir):
